@@ -7,7 +7,6 @@ use std::{
 
 use clap::Parser;
 use exe::PE;
-use rayon::prelude::*;
 use ureq::Error;
 
 const RP: &str = "./report";
@@ -17,6 +16,7 @@ struct Cli {
     malware_folder_path: String,
     api_key_file_path: String,
 }
+
 fn rename<P: AsRef<Path>>(base: P, from_name: &str, to_name: &str) {
     let src = base.as_ref().join(from_name);
     let target = base.as_ref().join(to_name);
@@ -30,6 +30,7 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir(RP).ok();
 
     let (key_queue_tail, key_queue_head) = crossbeam_channel::bounded::<String>(1000);
+    let mut current_key: Option<String> = None;
 
     let apikeys_file = std::fs::File::open(cli.api_key_file_path)?;
     assert!(apikeys_file.metadata()?.is_file());
@@ -69,7 +70,14 @@ fn main() -> anyhow::Result<()> {
         })
         .filter(|(filename, _e)| !filename.starts_with("__labelled"))
         .for_each(|(file_name, hash)| {
-            let key = key_queue_head.recv().unwrap();
+            let key = match &current_key {
+                Some(key) => key.clone(),
+                _ => {
+                    let key = key_queue_head.recv().unwrap();
+                    current_key = Some(key.clone());
+                    key
+                }
+            };
 
             let res_r = ureq::get(&format!("https://www.virustotal.com/api/v3/files/{hash}"))
                 .set("x-apikey", &key)
@@ -105,19 +113,14 @@ fn main() -> anyhow::Result<()> {
                                 &["__labelled_PE", &hash, "no_suggest_threat_label"].join("_"),
                             );
                         }
-                    } else {
                     }
-                    let key_queue_tail = key_queue_tail.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_secs(15));
-                        key_queue_tail.send(key.clone()).unwrap();
-                    });
                 }
                 Err(Error::Status(429, _r)) => {
                     println!("Error 429 {:?}", std::time::SystemTime::now());
+                    current_key.take();
                     let key_queue_tail = key_queue_tail.clone();
                     std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_secs(61 * 30));
+                        std::thread::sleep(Duration::from_secs(61 * 60 * 2));
                         key_queue_tail.send(key.clone()).unwrap();
                     });
                 }
@@ -126,11 +129,7 @@ fn main() -> anyhow::Result<()> {
                         "Error 401 maybe user is banned {:?}",
                         std::time::SystemTime::now()
                     );
-                    let key_queue_tail = key_queue_tail.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_secs(60 * 60 * 24));
-                        key_queue_tail.send(key.clone()).unwrap();
-                    });
+                    current_key.take();
                 }
                 Err(Error::Status(n, _)) => {
                     rename(
@@ -144,18 +143,8 @@ fn main() -> anyhow::Result<()> {
                         ]
                         .join("_"),
                     );
-                    let key_queue_tail = key_queue_tail.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_secs(15));
-                        key_queue_tail.send(key.clone()).unwrap();
-                    });
                 }
                 Err(e) => {
-                    let key_queue_tail = key_queue_tail.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_secs(15));
-                        key_queue_tail.send(key.clone()).unwrap();
-                    });
                     println!("Error {e}");
                 }
             };
