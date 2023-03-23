@@ -22,6 +22,7 @@ fn rename<P: AsRef<Path>>(base: P, from_name: &str, to_name: &str) {
     let target = base.as_ref().join(to_name);
     std::fs::rename(src, target).unwrap();
 }
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let malware_folder_path = Path::new(&cli.malware_folder_path);
@@ -29,6 +30,7 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir(RP).ok();
 
     let (key_queue_tail, key_queue_head) = crossbeam_channel::bounded::<String>(1000);
+
     let apikeys_file = std::fs::File::open(cli.api_key_file_path)?;
     assert!(apikeys_file.metadata()?.is_file());
 
@@ -40,9 +42,8 @@ fn main() -> anyhow::Result<()> {
         });
 
     std::fs::read_dir(malware_folder_path)?
-        .collect::<Vec<_>>()
-        .par_iter()
-        .filter_map(|e| e.as_ref().ok())
+        .into_iter()
+        .filter_map(|e| e.ok())
         .filter(|e| e.metadata().map(|f| f.is_file()).unwrap_or(false))
         .filter_map(|e| {
             let file_name = e.file_name().into_string().unwrap();
@@ -94,6 +95,15 @@ fn main() -> anyhow::Result<()> {
                                 &["__labelled_PE", &hash, &malware_type].join("_"),
                             );
                         } else {
+                            println!(
+                                "{}: {hash} is no label",
+                                COUNTER.fetch_add(1, Ordering::Relaxed)
+                            );
+                            rename(
+                                malware_folder_path,
+                                &file_name,
+                                &["__labelled_PE", &hash, "no_suggest_threat_label"].join("_"),
+                            );
                         }
                     } else {
                     }
@@ -105,14 +115,22 @@ fn main() -> anyhow::Result<()> {
                 }
                 Err(Error::Status(429, _r)) => {
                     println!("Error 429 {:?}", std::time::SystemTime::now());
-                    std::thread::sleep(Duration::from_secs(60));
-                    key_queue_tail.send(key.clone()).unwrap();
+                    let key_queue_tail = key_queue_tail.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_secs(61 * 30));
+                        key_queue_tail.send(key.clone()).unwrap();
+                    });
                 }
                 Err(Error::Status(401, _r)) => {
                     println!(
                         "Error 401 maybe user is banned {:?}",
                         std::time::SystemTime::now()
                     );
+                    let key_queue_tail = key_queue_tail.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_secs(60 * 60 * 24));
+                        key_queue_tail.send(key.clone()).unwrap();
+                    });
                 }
                 Err(Error::Status(n, _)) => {
                     rename(
@@ -126,9 +144,18 @@ fn main() -> anyhow::Result<()> {
                         ]
                         .join("_"),
                     );
-                    key_queue_tail.send(key.clone()).unwrap();
+                    let key_queue_tail = key_queue_tail.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_secs(15));
+                        key_queue_tail.send(key.clone()).unwrap();
+                    });
                 }
                 Err(e) => {
+                    let key_queue_tail = key_queue_tail.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_secs(15));
+                        key_queue_tail.send(key.clone()).unwrap();
+                    });
                     println!("Error {e}");
                 }
             };
