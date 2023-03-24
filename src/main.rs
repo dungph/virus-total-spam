@@ -24,6 +24,9 @@ fn rename<P: AsRef<Path>>(base: P, from_name: &str, to_name: &str) {
 }
 
 fn main() -> anyhow::Result<()> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(10)
+        .build_global()?;
     let cli = Cli::parse();
     let malware_folder_path = Path::new(&cli.malware_folder_path);
 
