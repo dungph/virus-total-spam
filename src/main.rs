@@ -2,11 +2,11 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::Path,
     sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
 };
 
 use clap::Parser;
 use exe::PE;
+use rayon::prelude::*;
 use ureq::Error;
 
 const RP: &str = "./report";
@@ -29,22 +29,15 @@ fn main() -> anyhow::Result<()> {
 
     std::fs::create_dir(RP).ok();
 
-    let (key_queue_tail, key_queue_head) = crossbeam_channel::bounded::<String>(1000);
-    let mut current_key: Option<String> = None;
-
     let apikeys_file = std::fs::File::open(cli.api_key_file_path)?;
     assert!(apikeys_file.metadata()?.is_file());
 
-    BufReader::new(apikeys_file)
-        .lines()
-        .filter_map(|k| k.ok())
-        .for_each(|k| {
-            key_queue_tail.send(k).unwrap();
-        });
+    let current_key = BufReader::new(apikeys_file).lines().find_map(|k| k.ok());
 
     std::fs::read_dir(malware_folder_path)?
-        .into_iter()
-        .filter_map(|e| e.ok())
+        .collect::<Vec<_>>()
+        .par_iter()
+        .filter_map(|e| e.as_ref().ok())
         .filter(|e| e.metadata().map(|f| f.is_file()).unwrap_or(false))
         .filter_map(|e| {
             let file_name = e.file_name().into_string().unwrap();
@@ -69,16 +62,13 @@ fn main() -> anyhow::Result<()> {
             }
         })
         .filter(|(filename, _e)| !filename.starts_with("__labelled"))
-        .for_each(|(file_name, hash)| {
-            let key = match &current_key {
-                Some(key) => key.clone(),
-                _ => {
-                    let key = key_queue_head.recv().unwrap();
-                    current_key = Some(key.clone());
-                    key
-                }
+        .any(|(file_name, hash)| {
+            let key = if let Some(key) = &current_key {
+                key.clone()
+            } else {
+                println!("no key");
+                return true;
             };
-
             let res_r = ureq::get(&format!("https://www.virustotal.com/api/v3/files/{hash}"))
                 .set("x-apikey", &key)
                 .call();
@@ -114,22 +104,16 @@ fn main() -> anyhow::Result<()> {
                             );
                         }
                     }
+                    return false;
                 }
                 Err(Error::Status(429, _r)) => {
                     println!("Error 429 {:?}", std::time::SystemTime::now());
-                    current_key.take();
-                    let key_queue_tail = key_queue_tail.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_secs(61 * 60 * 2));
-                        key_queue_tail.send(key.clone()).unwrap();
-                    });
                 }
                 Err(Error::Status(401, _r)) => {
                     println!(
                         "Error 401 maybe user is banned {:?}",
                         std::time::SystemTime::now()
                     );
-                    current_key.take();
                 }
                 Err(Error::Status(n, _)) => {
                     rename(
@@ -149,7 +133,7 @@ fn main() -> anyhow::Result<()> {
                 }
             };
 
-            //println!("File {e} is {name}");
+            true
         });
     Ok(())
 }
