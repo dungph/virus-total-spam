@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     io::{BufRead, BufReader, Read, Write},
     path::Path,
     sync::atomic::{AtomicUsize, Ordering},
@@ -32,10 +33,27 @@ fn main() -> anyhow::Result<()> {
 
     std::fs::create_dir(RP).ok();
 
-    let apikeys_file = std::fs::File::open(cli.api_key_file_path)?;
-    assert!(apikeys_file.metadata()?.is_file());
+    let mut keys = {
+        let apikeys_file = std::fs::File::open(&cli.api_key_file_path)?;
+        BufReader::new(apikeys_file)
+            .lines()
+            .filter_map(|l| l.ok())
+            .collect::<VecDeque<String>>()
+    };
 
-    let current_key = BufReader::new(apikeys_file).lines().find_map(|k| k.ok());
+    let current_key = keys.pop_front();
+
+    if let Some(key) = current_key.as_ref() {
+        keys.push_back(key.clone());
+    }
+
+    let mut file = std::fs::File::options()
+        .write(true)
+        .truncate(true)
+        .open(cli.api_key_file_path)?;
+    for key in keys {
+        file.write_all(format!("{key}\n").as_bytes())?;
+    }
 
     std::fs::read_dir(malware_folder_path)?
         .collect::<Vec<_>>()
@@ -138,5 +156,6 @@ fn main() -> anyhow::Result<()> {
 
             true
         });
+    println!("Change ip and rerun!");
     Ok(())
 }
