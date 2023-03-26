@@ -1,0 +1,11 @@
+Usage:
+
+./vtspam <virus folder> <keys>
+
+virus folder is directory contains virus files
+keys is a file contains api keys line by line
+
+file will be renamed to format:
+__labelled_NPE_<hash> if file is not a PE file
+__labelled_PE_<hash>_no_suggest_threat_label if file has no suggest threat label or the theat is not high enough
+__labelled_PE_<hash>_<malware_type> if file is malware
