@@ -60,6 +60,7 @@ fn main() -> anyhow::Result<()> {
         .par_iter()
         .filter_map(|e| e.as_ref().ok())
         .filter(|e| e.metadata().map(|f| f.is_file()).unwrap_or(false))
+        .filter(|e| !e.file_name().into_string().unwrap().ends_with("_labelled"))
         .filter_map(|e| {
             let file_name = e.file_name().into_string().unwrap();
             let mut buf = Vec::new();
@@ -77,12 +78,11 @@ fn main() -> anyhow::Result<()> {
                 rename(
                     malware_folder_path,
                     &file_name,
-                    &["__labelled_NPE", &md5].join("_"),
+                    &[&file_name, "notpe", "labelled"].join("_"),
                 );
                 None
             }
         })
-        .filter(|(filename, _e)| !filename.starts_with("__labelled"))
         .any(|(file_name, hash)| {
             let key = if let Some(key) = &current_key {
                 key.clone()
@@ -96,14 +96,14 @@ fn main() -> anyhow::Result<()> {
             match res_r {
                 Ok(res) => {
                     if let Ok(json) = res.into_json::<serde_json::Value>() {
-                        if let Ok(mut file) = std::fs::File::create(format!("{RP}/{hash}")) {
+                        if let Ok(mut file) = std::fs::File::create(format!("{RP}/{file_name}")) {
                             file.write_all(&serde_json::to_vec(&json).unwrap()).ok();
                         }
                         if let Some(malware_type) = json["data"]["attributes"]
                             ["popular_threat_classification"]["suggested_threat_label"]
                             .as_str()
                         {
-                            let malware_type = malware_type.replace("/", "|");
+                            let malware_type = malware_type.replace("/", ".");
                             println!(
                                 "{}: {hash} is {malware_type}",
                                 COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -111,7 +111,7 @@ fn main() -> anyhow::Result<()> {
                             rename(
                                 malware_folder_path,
                                 &file_name,
-                                &["__labelled_PE", &hash, &malware_type].join("_"),
+                                &[file_name.as_str(), &malware_type, "labelled"].join("_"),
                             );
                         } else {
                             println!(
@@ -121,7 +121,7 @@ fn main() -> anyhow::Result<()> {
                             rename(
                                 malware_folder_path,
                                 &file_name,
-                                &["__labelled_PE", &hash, "no_suggest_threat_label"].join("_"),
+                                &[&file_name, "nolabel", "labelled"].join("_"),
                             );
                         }
                     }
@@ -141,10 +141,10 @@ fn main() -> anyhow::Result<()> {
                         malware_folder_path,
                         &file_name,
                         &[
-                            "__labelled_PE",
-                            &hash,
+                            &file_name,
                             n.to_string().as_str(),
                             "or_undetected",
+                            "labelled",
                         ]
                         .join("_"),
                     );
